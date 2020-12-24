@@ -32,8 +32,10 @@ type options struct {
 	InstanceId string `short:"i" long:"instance" description:"(required) Cloud Spanner Instance ID."`
 	DatabaseId string `short:"d" long:"database" description:"(required) Cloud Spanner Database ID."`
 	Tables     string `long:"tables" description:"comma-separated table names, e.g. \"table1,table2\" "`
+	Columns    string `long:"columns" description:"comma-separated columns names for backup, e.g. \"name,age\" "`
 	NoDDL      bool   `long:"no-ddl" description:"No DDL information."`
 	NoData     bool   `long:"no-data" description:"Do not dump data."`
+	Backup     bool   `long:"backup" description:"If backup is true, will use update statement."`
 	Timestamp  string `long:"timestamp" description:"Timestamp for database snapshot in the RFC 3339 format."`
 	BulkSize   uint   `long:"bulk-size" description:"Bulk size for values in a single INSERT statement."`
 }
@@ -63,8 +65,23 @@ func main() {
 		tables = strings.Split(opts.Tables, ",")
 	}
 
+	var columns []string
+	if opts.Columns != "" {
+		columns = strings.Split(opts.Columns, ",")
+	}
+
+	if opts.Backup && len(columns) > 0 && len(tables) > 1 {
+		exitf("Can not specified more than one table when backup")
+	}
+
 	ctx := context.Background()
-	dumper, err := NewDumper(ctx, opts.ProjectId, opts.InstanceId, opts.DatabaseId, os.Stdout, timestamp, opts.BulkSize, tables)
+	dumper, err := NewDumper(ctx, opts.ProjectId, opts.InstanceId, opts.DatabaseId,
+		os.Stdout,
+		timestamp,
+		opts.BulkSize,
+		tables,
+		opts.Backup,
+		columns)
 	if err != nil {
 		exitf("Failed to create dumper: %v\n", err)
 	}

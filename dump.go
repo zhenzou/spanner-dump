@@ -41,20 +41,28 @@ const defaultBulkSize = 100
 
 // Dumper is a dumper to export a database.
 type Dumper struct {
-	project   string
-	instance  string
-	database  string
-	tables    map[string]bool
-	out       io.Writer
-	timestamp *time.Time
-	bulkSize  uint
-
+	project     string
+	instance    string
+	database    string
+	tables      map[string]bool
+	columns     []string
+	out         io.Writer
+	timestamp   *time.Time
+	bulkSize    uint
+	backup      bool
 	client      *spanner.Client
 	adminClient *adminapi.DatabaseAdminClient
 }
 
 // NewDumper creates Dumper with specified configurations.
-func NewDumper(ctx context.Context, project, instance, database string, out io.Writer, timestamp *time.Time, bulkSize uint, tables []string) (*Dumper, error) {
+func NewDumper(ctx context.Context, project, instance, database string,
+	out io.Writer,
+	timestamp *time.Time,
+	bulkSize uint,
+	tables []string,
+	backup bool,
+	columns []string,
+) (*Dumper, error) {
 	dbPath := fmt.Sprintf("projects/%s/instances/%s/databases/%s", project, instance, database)
 	client, err := spanner.NewClientWithConfig(ctx, dbPath, spanner.ClientConfig{
 		SessionPoolConfig: spanner.SessionPoolConfig{
@@ -174,7 +182,17 @@ func (d *Dumper) dumpTable(ctx context.Context, table *Table, txn *spanner.ReadO
 	iter := txn.Query(ctx, stmt)
 	defer iter.Stop()
 
-	writer := NewBufferedWriter(table, d.out, d.bulkSize)
+	var writer Writer
+	if d.backup {
+		columns := d.columns
+		if len(columns) == 0 {
+			columns = table.Columns
+		}
+		writer = NewUpdateWriter(table, d.out, columns)
+	} else {
+		writer = NewInsertWriter(table, d.out, d.bulkSize)
+	}
+
 	defer writer.Flush()
 	for {
 		row, err := iter.Next()

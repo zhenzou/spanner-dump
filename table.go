@@ -27,6 +27,7 @@ import (
 // Table represents a Spanner table.
 type Table struct {
 	Name        string
+	PrimaryKey  string
 	Columns     []string
 	ChildTables []*Table
 }
@@ -65,6 +66,7 @@ func (i *TableIterator) Do(f func(*Table) error) error {
 }
 
 type tableRow struct {
+	primaryKey string
 	name       string
 	parentName string
 	columns    []string
@@ -74,7 +76,7 @@ type tableRow struct {
 func FetchTables(ctx context.Context, txn *spanner.ReadOnlyTransaction) (*TableIterator, error) {
 	// SQL for fetching table name, parent, and columns
 	stmt := spanner.NewStatement(`
-SELECT t.TABLE_NAME as table, t.PARENT_TABLE_NAME as parent, c.columns
+SELECT t.TABLE_NAME as table, t.PARENT_TABLE_NAME as parent, c.columns,i.PRIMARY_KEY AS primary_key
 FROM INFORMATION_SCHEMA.TABLES as t
 JOIN (
     SELECT c.TABLE_NAME as table, ARRAY_AGG(c.COLUMN_NAME) as columns
@@ -83,12 +85,18 @@ JOIN (
     GROUP BY c.TABLE_NAME
 ) as c
 ON t.TABLE_NAME = c.table
+JOIN (
+	SELECT i.COLUMN_NAME AS PRIMARY_KEY ,i.TABLE_NAME
+	FROM INFORMATION_SCHEMA.INDEX_COLUMNS as i
+	WHERE i.INDEX_NAME='PRIMARY_KEY' AND INDEX_TYPE='PRIMARY_KEY'
+) as i
+ON i.TABLE_NAME = t.TABLE_NAME
 WHERE t.TABLE_CATALOG = '' AND t.TABLE_SCHEMA = ''
 ORDER BY t.TABLE_NAME ASC
 `)
 	var rows []tableRow
 	if err := txn.Query(ctx, stmt).Do(func(r *spanner.Row) error {
-		var tableName, parentTableName string
+		var tableName, parentTableName, primaryKey string
 		var columns []string
 		var parentTableNamePtr *string // nullable
 
@@ -106,8 +114,12 @@ ORDER BY t.TABLE_NAME ASC
 		if err := r.ColumnByName("columns", &columns); err != nil {
 			return err
 		}
+		if err := r.ColumnByName("primary_key", &primaryKey); err != nil {
+			return err
+		}
 
 		rows = append(rows, tableRow{
+			primaryKey: primaryKey,
 			name:       tableName,
 			columns:    columns,
 			parentName: parentTableName,
@@ -126,6 +138,7 @@ func findChildTables(rows []tableRow, parent string) []*Table {
 	for _, row := range rows {
 		if row.parentName == parent {
 			tables = append(tables, &Table{
+				PrimaryKey:  row.primaryKey,
 				Name:        row.name,
 				Columns:     row.columns,
 				ChildTables: findChildTables(rows, row.name),
